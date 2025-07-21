@@ -1,6 +1,7 @@
 // Kealy content script: Detect likely API keys on the page
-(function() {
-  // Expanded regexes for common API keys
+
+// This function finds keys on the page.
+function findApiKeys() {
   const regexes = [
     /sk_live_[0-9a-zA-Z]{24,}/g, // Stripe live
     /sk_test_[0-9a-zA-Z]{24,}/g, // Stripe test
@@ -10,30 +11,34 @@
     /ya29\.[0-9A-Za-z\-_]+/g, // Google OAuth
     /AKIA[0-9A-Z]{16}/g, // AWS Access Key ID
     /[A-Za-z0-9_\-]{32,}/g // Generic: 32+ chars, fallback
-  ]
-  const found = new Set()
-  const textNodes = []
+  ];
+  const found = new Set();
+  const textNodes = [];
 
-  // Collect all visible text nodes
   function walk(node) {
     if (node.nodeType === 3) {
-      textNodes.push(node)
+      textNodes.push(node);
     } else if (node.nodeType === 1 && node.childNodes && !['SCRIPT','STYLE','NOSCRIPT','IFRAME'].includes(node.tagName)) {
-      for (let child of node.childNodes) walk(child)
+      for (let child of node.childNodes) walk(child);
     }
   }
-  walk(document.body)
+  walk(document.body);
 
   for (const node of textNodes) {
     for (const regex of regexes) {
-      const matches = node.textContent.match(regex)
+      const matches = node.textContent.match(regex);
       if (matches) {
-        matches.forEach(k => found.add(k))
+        matches.forEach(k => found.add(k));
       }
     }
   }
+  return Array.from(found);
+}
 
-  if (found.size > 0) {
-    window.postMessage({ source: 'kealy-content', keys: Array.from(found) }, '*')
+// Listen for a message from the popup
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === "getKeys") {
+    const keys = findApiKeys();
+    sendResponse({ keys: keys });
   }
-})(); 
+}); 
