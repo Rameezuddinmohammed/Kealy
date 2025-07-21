@@ -16,6 +16,8 @@ function App() {
   const [serviceFilter, setServiceFilter] = useState<string>('All')
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
   const [prefillKey, setPrefillKey] = useState<string>('')
+  const [prefillName, setPrefillName] = useState<string>('')
+  const [prefillService, setPrefillService] = useState<string>('')
   const [masterPassword, setMasterPassword] = useState<string>('')
   const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [passwordStep, setPasswordStep] = useState<'setup' | 'enter' | null>(null)
@@ -84,15 +86,23 @@ function App() {
     }
   }, [user])
 
-  // On mount, check for ?key=... in URL and prefill API key input
+  // On mount, check for ?key=... and ?name=... and ?service=... in URL and prefill API key, name, and service inputs
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const key = params.get('key')
+    const name = params.get('name')
+    const service = params.get('service')
     if (key) {
       setPrefillKey(key)
       setTimeout(() => {
         apiKeyInputRef.current?.focus()
       }, 100)
+    }
+    if (name) {
+      setPrefillName(name)
+    }
+    if (service) {
+      setPrefillService(service)
     }
   }, [])
 
@@ -277,12 +287,16 @@ function App() {
               name="service"
               placeholder="Service (e.g. OpenAI)"
               required
+              value={prefillService}
+              onChange={e => setPrefillService(e.target.value)}
               className={`w-full px-4 py-2 border rounded ${darkMode ? 'bg-gray-700 text-white border-gray-600' : ''}`}
             />
             <input
               name="name"
               placeholder="Key Name (e.g. Test Key)"
               required
+              value={prefillName}
+              onChange={e => setPrefillName(e.target.value)}
               className={`w-full px-4 py-2 border rounded ${darkMode ? 'bg-gray-700 text-white border-gray-600' : ''}`}
             />
             <input
