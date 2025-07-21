@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { supabase } from './supabaseClient'
 import type { Session, AuthChangeEvent } from '@supabase/supabase-js'
+import { useRef } from 'react'
 
 function App() {
   const [user, setUser] = useState<any>(null)
@@ -14,6 +15,14 @@ function App() {
   })
   const [serviceFilter, setServiceFilter] = useState<string>('All')
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null)
+  const [prefillKey, setPrefillKey] = useState<string>('')
+  const [masterPassword, setMasterPassword] = useState<string>('')
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
+  const [passwordStep, setPasswordStep] = useState<'setup' | 'enter' | null>(null)
+  const [salt, setSalt] = useState<string | null>(null)
+  const [derivedKey, setDerivedKey] = useState<CryptoKey | null>(null)
+  const passwordInputRef = useRef<HTMLInputElement>(null)
+  const apiKeyInputRef = useRef<HTMLInputElement>(null)
 
   const showToast = (message: string, type: 'success' | 'error' = 'success') => {
     setToast({ message, type })
@@ -43,6 +52,19 @@ function App() {
 
   useEffect(() => {
     if (user) {
+      // On login, fetch salt for user
+      (async () => {
+        const { data, error } = await supabase.from('user_salts').select('salt').eq('user_id', user.id).single()
+        if (error && error.code === 'PGRST116') {
+          // No salt found, prompt for setup
+          setPasswordStep('setup')
+          setShowPasswordModal(true)
+        } else if (data && data.salt) {
+          setSalt(data.salt)
+          setPasswordStep('enter')
+          setShowPasswordModal(true)
+        }
+      })()
       setLoadingVault(true)
       supabase
         .from('vault_items')
@@ -62,6 +84,18 @@ function App() {
     }
   }, [user])
 
+  // On mount, check for ?key=... in URL and prefill API key input
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const key = params.get('key')
+    if (key) {
+      setPrefillKey(key)
+      setTimeout(() => {
+        apiKeyInputRef.current?.focus()
+      }, 100)
+    }
+  }, [])
+
   const handleLogin = async () => {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -74,15 +108,65 @@ function App() {
     setUser(null)
   }
 
+  // Helper: derive key from password and salt
+  async function deriveKey(password: string, saltB64: string): Promise<CryptoKey> {
+    const enc = new TextEncoder()
+    const salt = Uint8Array.from(atob(saltB64), c => c.charCodeAt(0))
+    const keyMaterial = await window.crypto.subtle.importKey(
+      'raw', enc.encode(password), { name: 'PBKDF2' }, false, ['deriveKey']
+    )
+    return window.crypto.subtle.deriveKey(
+      {
+        name: 'PBKDF2',
+        salt,
+        iterations: 100000,
+        hash: 'SHA-256',
+      },
+      keyMaterial,
+      { name: 'AES-GCM', length: 256 },
+      false,
+      ['encrypt', 'decrypt']
+    )
+  }
+
+  // Handle password modal submit
+  async function handlePasswordSubmit(e: React.FormEvent) {
+    e.preventDefault()
+    if (!masterPassword) return
+    if (passwordStep === 'setup') {
+      // Generate salt, store in Supabase
+      const saltArr = window.crypto.getRandomValues(new Uint8Array(16))
+      const saltB64 = btoa(String.fromCharCode(...saltArr))
+      const { error } = await supabase.from('user_salts').insert({ user_id: user.id, salt: saltB64 })
+      if (error) {
+        showToast('Failed to save salt', 'error')
+        return
+      }
+      setSalt(saltB64)
+      const key = await deriveKey(masterPassword, saltB64)
+      setDerivedKey(key)
+      setShowPasswordModal(false)
+      setPasswordStep(null)
+    } else if (passwordStep === 'enter' && salt) {
+      try {
+        const key = await deriveKey(masterPassword, salt)
+        setDerivedKey(key)
+        setShowPasswordModal(false)
+        setPasswordStep(null)
+      } catch {
+        showToast('Incorrect password', 'error')
+      }
+    }
+    setMasterPassword('')
+  }
+
   const encryptKey = async (key: string) => {
+    if (!derivedKey) throw new Error('No encryption key')
     const enc = new TextEncoder()
     const iv = crypto.getRandomValues(new Uint8Array(12))
     const algo = { name: 'AES-GCM', iv }
-
-    const rawKey = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt'])
-    const encrypted = await crypto.subtle.encrypt(algo, rawKey, enc.encode(key))
+    const encrypted = await crypto.subtle.encrypt(algo, derivedKey, enc.encode(key))
     const authTag = new Uint8Array(encrypted).slice(-16)
-
     return {
       encrypted_key: btoa(String.fromCharCode(...new Uint8Array(encrypted))),
       iv: btoa(String.fromCharCode(...iv)),
@@ -132,10 +216,13 @@ function App() {
     setDecrypting(true)
     setShowingKeyId(item.id)
     try {
-      // For demo: generate a new key (in real use, you'd need to store/export the key securely)
-      // This will only work for the current session's keys
-      // For MVP demo, only show keys added in this session
-      setDecryptedKey('(Demo limitation: cannot decrypt previously saved keys)')
+      if (!derivedKey) throw new Error('No decryption key')
+      const enc = new TextEncoder()
+      const dec = new TextDecoder()
+      const iv = Uint8Array.from(atob(item.iv), c => c.charCodeAt(0))
+      const encrypted = Uint8Array.from(atob(item.encrypted_key), c => c.charCodeAt(0))
+      const decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, derivedKey, encrypted)
+      setDecryptedKey(dec.decode(decrypted))
     } catch (e) {
       setDecryptedKey('Failed to decrypt')
     }
@@ -145,8 +232,32 @@ function App() {
   const uniqueServices = Array.from(new Set(vaultItems.map(item => item.service_name)))
   const filteredItems = serviceFilter === 'All' ? vaultItems : vaultItems.filter(item => item.service_name === serviceFilter)
 
+  // Password modal UI
+  const passwordModal = showPasswordModal && (
+    <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+      <form onSubmit={handlePasswordSubmit} className="bg-white dark:bg-gray-800 p-6 rounded shadow w-full max-w-xs">
+        <h2 className="text-lg font-semibold mb-4 text-center">
+          {passwordStep === 'setup' ? 'Set a Master Password' : 'Enter Master Password'}
+        </h2>
+        <input
+          ref={passwordInputRef}
+          type="password"
+          value={masterPassword}
+          onChange={e => setMasterPassword(e.target.value)}
+          placeholder="Master Password"
+          className="w-full px-3 py-2 border rounded mb-4 dark:bg-gray-700 dark:text-white"
+          required
+        />
+        <button type="submit" className="w-full py-2 rounded bg-blue-600 text-white font-semibold hover:bg-blue-700 transition">
+          {passwordStep === 'setup' ? 'Set Password' : 'Unlock Vault'}
+        </button>
+      </form>
+    </div>
+  )
+
   return (
     <div className={`flex items-center justify-center min-h-screen transition-colors duration-300 ${darkMode ? 'bg-gray-900' : 'bg-gray-100'}`}>
+      {passwordModal}
       <button
         onClick={() => setDarkMode(dm => !dm)}
         className={`absolute top-4 right-4 px-3 py-1 rounded shadow text-xs font-semibold transition-colors duration-200 ${darkMode ? 'bg-gray-700 text-white hover:bg-gray-600' : 'bg-gray-200 text-gray-900 hover:bg-gray-300'}`}
@@ -178,6 +289,9 @@ function App() {
               name="apikey"
               placeholder="API Key"
               required
+              ref={apiKeyInputRef}
+              value={prefillKey}
+              onChange={e => setPrefillKey(e.target.value)}
               className={`w-full px-4 py-2 border rounded ${darkMode ? 'bg-gray-700 text-white border-gray-600' : ''}`}
             />
             <button
@@ -281,6 +395,12 @@ function App() {
         >
           {toast.message}
         </div>
+      )}
+      {/* Clear prefillKey after successful save */}
+      {prefillKey && toast?.type === 'success' && (
+        <script>
+          window.history.replaceState({}, document.title, window.location.pathname);
+        </script>
       )}
     </div>
   )

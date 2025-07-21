@@ -24,11 +24,15 @@ npm install
 ```
 
 ### 3. Configure Environment Variables
-Create a `.env` file in `kealy-frontend/` with your Supabase credentials:
+Create a `.env` file in `kealy-frontend/` with your Supabase credentials. **Do not commit your real keys!**
+
+See `.env.example` for the required variable names:
 ```env
-VITE_SUPABASE_URL=https://tuhmgihugkuykzsujdiv.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR1aG1naWh1Z2t1eWt6c3VqZGl2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTMwODMyNDUsImV4cCI6MjA2ODY1OTI0NX0.3nl9RmRU6BPEYG4OUi4SphUDCQ56N2hxND4CkkzaK_Y
+VITE_SUPABASE_URL=your-supabase-url
+VITE_SUPABASE_ANON_KEY=your-supabase-anon-key
 ```
+
+You can get these values from your own [Supabase project dashboard](https://app.supabase.com/).
 
 ### 4. Run the App
 ```sh
